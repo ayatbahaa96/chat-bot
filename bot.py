@@ -14,6 +14,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
+import os
+hf_token = os.getenv("HF_TOKEN")
 
 # ---------------------------
 # Streamlit page config + CSS
@@ -311,3 +313,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
