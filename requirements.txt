@@ -1,0 +1,29 @@
+# Core Dependencies
+streamlit>=1.28.0
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-huggingface>=0.0.3
+langchain-groq>=0.1.0
+
+# Vector Store and Embeddings
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+
+# Document Processing
+PyPDF2>=3.0.1
+python-docx>=0.8.11
+unstructured>=0.10.30
+pandas>=1.5.3
+
+# Environment and API
+python-dotenv>=1.0.0
+groq>=0.4.2
+
+# Additional utilities
+numpy>=1.24.0
+pillow>=10.0.0
+tiktoken>=0.5.0
+
+# Optional: For better performance
+# torch>=2.0.0  # Uncomment if you want to use GPU acceleration
+# transformers>=4.30.0  # For more embedding model options
