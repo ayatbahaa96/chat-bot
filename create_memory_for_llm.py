@@ -77,6 +77,25 @@ class DocumentProcessor:
         logger.info(f"Total documents loaded: {len(documents)}")
         return documents
     
+    def format_source_documents(source_docs: List[Document]) -> str:
+        if not source_docs:
+            return "No source documents found."
+        formatted = []
+        for i, doc in enumerate(source_docs, 1):
+            content = doc.page_content
+            preview = (content[:1000] + "...") if len(content) > 1000 else content
+            source = doc.metadata.get("source", "Unknown source")
+
+            # PDF page numbers düzeltme
+            raw_page = doc.metadata.get("page", 0)
+            page_num = int(raw_page) + 1  # 0 tabanlı indexi 1 tabanlıya çevir
+
+            formatted.append(
+                f"**Source {i}:** {source} (Page {page_num})\n\n*Preview:* {preview}"
+            )
+        return "\n\n---\n\n".join(formatted)
+
+
     def create_chunks(self, documents: List[Document]) -> List[Document]:
         """Create text chunks with improved splitting strategy"""
         if not documents:
