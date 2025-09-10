@@ -14,8 +14,6 @@ from langchain_core.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
-import os
-hf_token = os.getenv("HF_TOKEN")
 
 # ---------------------------
 # Streamlit page config + CSS
@@ -80,15 +78,15 @@ def get_vectorstore():
 def create_enhanced_prompt() -> PromptTemplate:
     template = """
 You are an intelligent assistant with access to relevant document context. 
-Use the provided context to give comprehensive, accurate answers.
+Use the provided context to give **detailed, comprehensive answers**.
 
 Guidelines:
 - Answer based primarily on the provided context
 - If information is not in the context, clearly state that
-- Provide detailed explanations when possible
-- Use examples from the context when relevant
+- **Always provide multi-sentence, well-explained responses**
+- Add examples or reasoning if relevant
 - Be conversational but informative
-- If asked about previous conversation, use the chat history
+- Summarize key points and then elaborate
 
 Context from documents:
 {context}
@@ -98,10 +96,12 @@ Chat History:
 
 Human Question: {question}
 
-Assistant Response:"""
+Assistant Response (long, detailed):"""
     return PromptTemplate(
-        template=template, input_variables=["context", "chat_history", "question"]
+        template=template,
+        input_variables=["context", "chat_history", "question"],
     )
+
 
 # ---------------------------------------
 # Hugging Face model registry (repo IDs)
@@ -139,7 +139,7 @@ def create_qa_chain(
             repo_id=repo_id,
             temperature=temperature,
             huggingfacehub_api_token=hf_token,
-            max_new_tokens=512,  # pass explicitly (not in model_kwargs)
+            max_new_tokens=1024,  # pass explicitly (not in model_kwargs)
         )
         llm = ChatHuggingFace(llm=endpoint)
 
@@ -313,4 +313,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
