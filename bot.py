@@ -217,7 +217,7 @@ def main():
         selected_repo = models[selected_model_name]
 
         with st.expander("🔧 Advanced Settings"):
-            temperature = st.slider("Temperature (Creativity)", 0.0, 1.0, 0.1, 0.1)
+            temperature = st.slider("Temperature (Creativity)", 0.0, 4.0, 0.1, 0.1)
             k_docs = st.slider("Number of source documents (k)", 1, 11, 4)
             show_sources = st.checkbox("Show source documents", value=True)
         st.session_state["show_sources"] = show_sources
@@ -313,3 +313,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
