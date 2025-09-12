@@ -1,9 +1,9 @@
-# bot_improved.py
+# Updated bot.py -- edits based on user's eval report
 import os
 import time
 import streamlit as st
-from typing import List, Dict, Any
-import json
+from typing import List, Dict, Optional
+import re
 
 from langchain_huggingface import (
     HuggingFaceEndpoint,
@@ -20,8 +20,8 @@ from langchain.schema import Document
 # Streamlit page config + CSS
 # ---------------------------
 st.set_page_config(
-    page_title="Gelişmiş RAG Chatbot (Teknik Doğruluk Odaklı)",
-    page_icon="🔬",
+    page_title="Enhanced AI Chatbot (Hugging Face)",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -29,48 +29,21 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #2E86AB;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .source-doc {
-        background-color: #FFF3E0;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.5rem 0;
-        font-size: 0.9rem;
-    }
-    .accuracy-warning {
-        background-color: #FFE5E5;
-        border-left: 5px solid #FF6B6B;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .technical-table {
-        background-color: #F8F9FA;
-        border: 1px solid #DEE2E6;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
+    .main-header { font-size: 2.2rem; color: #2E86AB; text-align: center; margin-bottom: 1rem; }
+    .source-doc { background-color: #FFF3E0; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0; font-size: 0.9rem;}
+    .warn { color: #B00020; font-weight: bold; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-# ---------------------------
-# Paths / Constants
-# ---------------------------
 DB_FAISS_PATH = "vectorstore/db_faiss"
 
-# -----------------------------------
+# ---------------------------
 # Cached: load your FAISS vectorstore
-# -----------------------------------
+# ---------------------------
 @st.cache_resource
 def get_vectorstore():
-    """Load and cache the vector store."""
     try:
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
@@ -87,34 +60,26 @@ def get_vectorstore():
         return None
 
 # ---------------------------
-# Enhanced prompt template with technical accuracy focus
+# Prompt template (stricter)
 # ---------------------------
 def create_enhanced_prompt() -> PromptTemplate:
+    # Enforce: every technical claim MUST have source in form: [DocTitle | page N | chunk_id]
+    # Enforce output sections: Short summary, Sources table, Service/Test Conditions Table, Safety example, Mini-calculation, Verification matrix
     template = """
-You are a TECHNICAL EXPERT assistant with access to engineering documents. Your responses must be ACCURATE and TRACEABLE.
+You are an engineering assistant with access to document context. Use the provided context to answer precisely and with traceable sources.
 
-CRITICAL REQUIREMENTS:
-1. **ACCURACY FIRST**: Never make technical claims without document support. If unsure, state limitations clearly.
-2. **PRECISE CITATIONS**: For each technical claim, cite EXACT source (book name + page/section).
-3. **STRUCTURED FORMAT**: Use tables, formulas, and clear sections for technical content.
-4. **SAFETY FOCUS**: Always consider safety factors, environmental conditions, and failure modes.
-5. **NO HALLUCINATION**: If information isn't in context, explicitly state "Not found in provided documents".
-
-RESPONSE STRUCTURE:
-## Direct Answer
-[Concise technical answer with key parameters]
-
-## Technical Details
-[Detailed explanation with formulas, tables if applicable]
-
-## Source References
-[Exact citations: Document name, Page X, Section Y]
-
-## Safety Considerations
-[Environmental factors, failure modes, compliance standards]
-
-## Limitations
-[What cannot be determined from available context]
+RULES:
+1) For EVERY technical claim include a source reference EXACTLY in the form: [DocumentName | page <n> | chunk_id=<id>]. If claim cannot be sourced from context, state: "(no source in context)" next to the claim.
+2) If you reference figures (e.g., "Fig. 10.25" or "Şekil 10.25"), check source documents and include the exact document+page. If not found, write: "**HALÜSİNASYON: citation not found in KB**".
+3) Provide numeric thresholds where possible. For safety factors, show a worked mini-calculation example.
+4) Include these sections (use Markdown headings): 
+   - **Short Summary**
+   - **Key Claims & Sources** (bulleted; each item ends with [Doc | page N | chunk_id=X])
+   - **Service/Test Conditions Table** (Markdown table: Area | Load spectrum | Temperature | RH | Impact | Standard | Target life)
+   - **Safety Philosophy (example calc)**: show σ_allow calculation with numbers
+   - **Verification Matrix** (table: Coupon | Condition | n | Metric | Acceptance band)
+   - **Notes & Uncertainties** (explicitly list any assumptions)
+5) Be concise, copy-paste friendly, and avoid vague "may" without numbers.
 
 Context from documents:
 {context}
@@ -122,80 +87,68 @@ Context from documents:
 Chat History:
 {chat_history}
 
-Technical Question: {question}
+Human Question: {question}
 
-Expert Response (structured, cited, safety-conscious):"""
-    
+Assistant Response (provide all sections; if info missing, explicitly say what is missing and which documents would be needed):"""
     return PromptTemplate(
         template=template,
         input_variables=["context", "chat_history", "question"],
     )
 
 # ---------------------------------------
-# Enhanced model registry with quality focus
+# Hugging Face model registry (repo IDs)
 # ---------------------------------------
 def available_hf_models() -> dict:
+    # corrected mappings; update repo ids to ones you have access to
     return {
-        "Mistral 7B Instruct (v0.3)": "mistralai/Mistral-7B-Instruct-v0.3",
-        "Llama 3.1 8B Instruct": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-        "Llama 3.1 70B Instruct": "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "CodeLlama 7B Instruct": "codellama/CodeLlama-7b-Instruct-hf",
-        # Technical/scientific models if available
+        "Mistral 7B Instruct": "mistralai/Mistral-7B-Instruct-v0.3",
+        "Llama 3 8B Instruct": "meta-llama/Llama-3-8b-instruct",          # example corrected id
+        "Llama 3 70B Instruct": "meta-llama/Llama-3-70b-instruct",        # corrected id placeholder
+        # Add/adjust to match your HF account access
     }
 
 # ------------------------------------------------------
-# Enhanced QA chain with better retrieval
+# Build a ConversationalRetrievalChain with HF endpoint
 # ------------------------------------------------------
 def create_qa_chain(
     repo_id: str,
     vectorstore,
     temperature: float = 0.1,
-    k: int = 6,  # Increased for better context
+    k: int = 4,
 ):
     try:
         hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN") or os.getenv("HF_TOKEN")
         if not hf_token:
-            st.error("❌ Missing Hugging Face token. Set HUGGINGFACEHUB_API_TOKEN (or HF_TOKEN).")
+            st.error(
+                "❌ Missing Hugging Face token. Set HUGGINGFACEHUB_API_TOKEN (or HF_TOKEN)."
+            )
             return None
 
-        # Enhanced endpoint configuration
         endpoint = HuggingFaceEndpoint(
             repo_id=repo_id,
             temperature=temperature,
             huggingfacehub_api_token=hf_token,
-            max_new_tokens=2048,  # Increased for detailed technical responses
-            repetition_penalty=1.1,
-            return_full_text=False,
+            max_new_tokens=1024,
         )
         llm = ChatHuggingFace(llm=endpoint)
 
-        # Enhanced memory with more context
         memory = ConversationBufferWindowMemory(
-            k=8,  # Increased context window
+            k=5,
             memory_key="chat_history",
             output_key="answer",
             return_messages=True,
         )
 
-        # Enhanced prompt
         prompt = create_enhanced_prompt()
 
-        # Enhanced retriever with hybrid search
-        retriever = vectorstore.as_retriever(
-            search_type="similarity_score_threshold",
-            search_kwargs={
-                "k": k,
-                "score_threshold": 0.3,  # Filter low-relevance results
-            }
-        )
-
-        # Build chain
         chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
-            retriever=retriever,
+            retriever=vectorstore.as_retriever(
+                search_type="similarity", search_kwargs={"k": k}
+            ),
             memory=memory,
             return_source_documents=True,
-            verbose=True,  # Enable for debugging
+            verbose=False,
             combine_docs_chain_kwargs={"prompt": prompt},
         )
         return chain
@@ -204,205 +157,140 @@ def create_qa_chain(
         return None
 
 # ---------------------------
-# Enhanced source document formatting
+# Helpers
 # ---------------------------
 def format_source_documents(source_docs: List[Document]) -> str:
     if not source_docs:
-        return "⚠️ No source documents found - response may not be reliable."
-    
+        return "No source documents found."
     formatted = []
     for i, doc in enumerate(source_docs, 1):
-        content = doc.page_content.strip()
-        preview = (content[:600] + "...") if len(content) > 600 else content
-        
-        # Enhanced metadata extraction
+        content = doc.page_content
+        preview = (content[:400] + "...") if len(content) > 400 else content
         source = doc.metadata.get("source", "Unknown source")
-        page = doc.metadata.get("page", "Unknown page")
-        
-        # Clean up source name
-        source_name = os.path.basename(source) if source != "Unknown source" else source
-        
-        # Add relevance score if available
-        score = doc.metadata.get("score", "N/A")
-        score_text = f" (Score: {score:.3f})" if isinstance(score, float) else ""
-        
+        raw_page = doc.metadata.get("page", None)
+        page = f"{int(raw_page)+1}" if raw_page is not None and str(raw_page).isdigit() else raw_page
+        chunk_id = doc.metadata.get("chunk_id", "N/A")
         formatted.append(
-            f"**📄 Source {i}:** {source_name}\n"
-            f"**📍 Page:** {page}{score_text}\n\n"
-            f"**📖 Content Preview:**\n{preview}"
+            f"**Source {i}:** {source} (page {page}, chunk_id={chunk_id})\n\n*Preview:* {preview}"
         )
-    
-    return "\n\n" + "="*50 + "\n\n".join([""] + formatted)
+    return "\n\n---\n\n".join(formatted)
 
-def validate_response_quality(response: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate and enhance response quality"""
-    answer = response.get("answer", "")
-    source_docs = response.get("source_documents", [])
-    
-    quality_issues = []
-    
-    # Check for potential hallucination indicators
-    hallucination_keywords = [
-        "şekil", "figure", "tablo", "table", "grafik", "chart",
-        "sayfa", "page", "bölüm", "chapter", "örnek", "example"
-    ]
-    
-    for keyword in hallucination_keywords:
-        if keyword.lower() in answer.lower():
-            # Check if this reference is actually supported by sources
-            if not any(keyword.lower() in doc.page_content.lower() for doc in source_docs):
-                quality_issues.append(f"⚠️ Potential hallucination: Reference to '{keyword}' not found in sources")
-    
-    # Check for vague technical claims
-    vague_terms = ["genellikle", "typically", "usually", "often", "sometimes"]
-    for term in vague_terms:
-        if term in answer.lower():
-            quality_issues.append(f"⚠️ Vague statement detected: '{term}' - consider requesting more specific information")
-    
-    return {
-        "answer": answer,
-        "source_documents": source_docs,
-        "quality_issues": quality_issues
-    }
+def find_figure_in_sources(source_docs: List[Document], figure_str: str) -> Optional[Document]:
+    # search for figure string (e.g., "Fig. 10.25" or "Şekil 10.25") in source_docs content/pages
+    for doc in source_docs:
+        if figure_str.lower() in doc.page_content.lower():
+            return doc
+    return None
 
-def display_chat(role: str, content: str, sources: str | None = None, quality_issues: List[str] = None):
+def hallucination_check(answer_text: str, source_docs: List[Document]) -> List[str]:
+    flags = []
+    # look for "Fig." or "Şekil" mentions and verify presence in sources
+    for m in re.finditer(r'(Fig\.|Şekil|Figure)\s*\d+(\.\d+)?', answer_text, flags=re.IGNORECASE):
+        fig = m.group(0)
+        found = find_figure_in_sources(source_docs, fig)
+        if not found:
+            flags.append(f"HALÜSİNASYON: referenced {fig} not found in retrieved sources.")
+    # look for DOI-like patterns and check presence
+    for doi in re.finditer(r'doi:\s*10\.\d{4,9}/\S+', answer_text, flags=re.IGNORECASE):
+        doi_s = doi.group(0)
+        # naive check: see if any source contains the doi string
+        if not any(doi_s.lower() in (doc.page_content or "").lower() for doc in source_docs):
+            flags.append(f"HALÜSİNASYON: referenced {doi_s} not found in sources.")
+    return flags
+
+# Mini safety calculation (example) - implements the sample from your report
+def compute_allowable(f_t0: float, hot_wet_knockdown_pct: float, gamma_M: float) -> Dict[str, float]:
+    """
+    Example: F_t0(dry)=800 MPa; hot-wet −%20 → 640 MPa; γ_M=1.5 ⇒ σ_allow≈427 MPa
+    hot_wet_knockdown_pct: e.g., 20 for 20%
+    """
+    f_hot_wet = f_t0 * (1.0 - hot_wet_knockdown_pct / 100.0)
+    sigma_allow = f_hot_wet / gamma_M
+    return {"f_hot_wet": f_hot_wet, "sigma_allow": sigma_allow}
+
+# Evaluation function: scores an assistant response using the 10-item scale & weights from your report
+EVAL_WEIGHTS = [1.5, 2.0, 1.5, 1.0, 1.5, 1.0, 0.5, 1.5, 0.5, 1.0]  # weights for items 1..10
+def score_response_manual(grades: List[int]) -> Dict:
+    """
+    grades: list of 10 integers each in {0,1,2}
+    returns weighted total and breakdown
+    """
+    if len(grades) != 10:
+        raise ValueError("grades must be length 10")
+    breakdown = []
+    total = 0.0
+    for i, g in enumerate(grades):
+        contrib = g * EVAL_WEIGHTS[i]
+        breakdown.append({"item": i+1, "grade": g, "weight": EVAL_WEIGHTS[i], "contrib": contrib})
+        total += contrib
+    return {"breakdown": breakdown, "total": total, "max_score": 24.0}
+
+def display_chat(role: str, content: str, sources: str | None = None):
     if role == "user":
         with st.chat_message("user"):
             st.markdown(content)
     else:
         with st.chat_message("assistant"):
-            # Display quality issues first if any
-            if quality_issues:
-                with st.expander("⚠️ Quality Assessment", expanded=True):
-                    st.markdown('<div class="accuracy-warning">', unsafe_allow_html=True)
-                    st.warning("**Response Quality Issues Detected:**")
-                    for issue in quality_issues:
-                        st.write(f"• {issue}")
-                    st.write("\n**Recommendation:** Verify claims against original documents or request more specific information.")
-                    st.markdown('</div>', unsafe_allow_html=True)
-            
             st.markdown(content)
-            
             if sources and st.session_state.get("show_sources", True):
-                with st.expander("📚 Source Documents & Citations", expanded=False):
+                with st.expander("📚 Source Documents", expanded=False):
                     st.markdown(sources)
 
 # ---------------------------
-# Technical validation helpers
-# ---------------------------
-def create_technical_summary_table():
-    """Create a technical summary table for common engineering topics"""
-    st.markdown('<div class="technical-table">', unsafe_allow_html=True)
-    st.write("### 🔧 Common Technical Parameters")
-    
-    # Example table structure - you can customize based on your domain
-    technical_data = {
-        "Load Type": ["Static", "Dynamic", "Fatigue", "Impact"],
-        "Safety Factor (γ)": ["1.35-2.0", "1.5-3.0", "Variable", "2.0-4.0"],
-        "Environment": ["Dry", "Hot-Wet", "Corrosive", "Extreme"],
-        "Test Standard": ["ISO/ASTM", "MIL-STD", "EN", "Custom"]
-    }
-    
-    st.table(technical_data)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------------------------
-# Main App with enhanced features
+# Main App
 # ---------------------------
 def main():
-    st.markdown("<h1 class='main-header'>🔬 Gelişmiş RAG Chatbot (Teknik Doğruluk Odaklı)</h1>", unsafe_allow_html=True)
-    
-    # Enhanced sidebar
-    with st.sidebar:
-        st.header("⚙️ Model Ayarları")
+    st.markdown("<h1 class='main-header'>🤖 Enhanced AI Chatbot (Hugging Face) — RAG with eval tooling</h1>", unsafe_allow_html=True)
 
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Settings")
         models = available_hf_models()
-        selected_model_name = st.selectbox(
-            "Hugging Face Modeli:",
-            options=list(models.keys()),
-            index=0,
-        )
+        selected_model_name = st.selectbox("Select Hugging Face Model:", options=list(models.keys()), index=0)
         selected_repo = models[selected_model_name]
 
-        with st.expander("🔧 Gelişmiş Ayarlar"):
-            temperature = st.slider("Temperature (Yaratıcılık)", 0.0, 1.0, 0.05, 0.05)  # Lower for accuracy
-            k_docs = st.slider("Kaynak doküman sayısı (k)", 3, 15, 6)
-            score_threshold = st.slider("Relevance threshold", 0.1, 0.9, 0.3, 0.1)
-            show_sources = st.checkbox("Kaynak dokümanları göster", value=True)
-            enable_quality_check = st.checkbox("Kalite kontrolü aktif", value=True)
-        
+        with st.expander("🔧 Advanced Settings"):
+            temperature = st.slider("Temperature (Creativity)", 0.0, 1.0, 0.1, 0.1)
+            k_docs = st.slider("Number of source documents (k)", 1, 11, 4)
+            show_sources = st.checkbox("Show source documents", value=True)
         st.session_state["show_sources"] = show_sources
-        st.session_state["enable_quality_check"] = enable_quality_check
 
-        st.header("📊 Oturum İstatistikleri")
+        st.header("📊 Session Stats")
         if "messages" in st.session_state:
-            st.metric("Toplam Mesaj", len(st.session_state.messages))
+            st.metric("Messages", len(st.session_state.messages))
             user_msgs = sum(1 for m in st.session_state.messages if m["role"] == "user")
-            st.metric("Sorulan Soru", user_msgs)
-            
-            # Quality metrics
-            if "quality_scores" in st.session_state:
-                avg_quality = sum(st.session_state.quality_scores) / len(st.session_state.quality_scores)
-                st.metric("Ortalama Kalite", f"{avg_quality:.1f}/10")
+            st.metric("Questions Asked", user_msgs)
 
-        st.header("📖 Teknik Referans")
-        create_technical_summary_table()
-
-    # Initialize session state
+    # Init session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "qa_chain" not in st.session_state:
         st.session_state.qa_chain = None
     if "vectorstore" not in st.session_state:
-        with st.spinner("Bilgi bankası yükleniyor..."):
+        with st.spinner("Loading knowledge base..."):
             st.session_state.vectorstore = get_vectorstore()
-    if "quality_scores" not in st.session_state:
-        st.session_state.quality_scores = []
 
-    # Display chat history
+    # Show history
     for m in st.session_state.messages:
-        display_chat(
-            m["role"], 
-            m["content"], 
-            m.get("sources"),
-            m.get("quality_issues", [])
-        )
+        display_chat(m["role"], m["content"], m.get("sources"))
 
-    # Enhanced chat input with suggestions
-    st.write("### 💡 Örnek Teknik Sorular:")
-    example_questions = [
-        "Kompozit malzemelerde emniyet katsayısı nasıl hesaplanır?",
-        "Hot-wet koşullarında mukavemet değerleri nasıl etkilenir?",
-        "Yorgunluk testlerinde kullanılan standartlar nelerdir?",
-        "Raylı sistem yüklerinde dinamik faktörler nelerdir?"
-    ]
-    
-    cols = st.columns(2)
-    for i, question in enumerate(example_questions):
-        if cols[i % 2].button(f"❓ {question[:50]}...", key=f"q_{i}"):
-            st.session_state.suggested_question = question
-
-    # Main chat input
-    suggested = st.session_state.get("suggested_question", "")
-    if prompt := st.chat_input("Teknik sorunuzu sorun...", value=suggested):
-        if "suggested_question" in st.session_state:
-            del st.session_state.suggested_question
-            
+    # Chat input
+    if prompt := st.chat_input("Ask me anything about your documents..."):
         display_chat("user", prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         if st.session_state.vectorstore is None:
-            st.error("Vector store yüklenemedi. Data dizinini kontrol edin.")
+            st.error("Vector store not loaded. Check your data directory.")
             return
 
-        # Rebuild chain if parameters changed
+        # (Re)build chain if needed
         if (
             st.session_state.qa_chain is None
             or st.session_state.get("current_repo") != selected_repo
             or st.session_state.get("current_temp") != temperature
             or st.session_state.get("current_k") != k_docs
         ):
-            with st.spinner("Model hazırlanıyor..."):
+            with st.spinner("Initializing Hugging Face model..."):
                 st.session_state.qa_chain = create_qa_chain(
                     repo_id=selected_repo,
                     vectorstore=st.session_state.vectorstore,
@@ -414,79 +302,56 @@ def main():
                 st.session_state.current_k = k_docs
 
         if st.session_state.qa_chain is None:
-            st.error("Model başlatılamadı. HF token'ınızı kontrol edin.")
+            st.error("Failed to initialize the model. Ensure your HF token is set.")
             return
 
-        # Generate enhanced response
         try:
-            with st.spinner("Teknik analiz yapılıyor..."):
+            with st.spinner("Thinking..."):
                 t0 = time.time()
                 response = st.session_state.qa_chain.invoke({"question": prompt})
                 dt = time.time() - t0
 
-                # Enhanced response validation
-                if enable_quality_check:
-                    validated_response = validate_response_quality(response)
-                    answer = validated_response["answer"]
-                    source_docs = validated_response["source_documents"]
-                    quality_issues = validated_response["quality_issues"]
-                else:
-                    answer = response.get("answer", "Cevap oluşturulamadı.")
-                    source_docs = response.get("source_documents", [])
-                    quality_issues = []
+                answer = response.get("answer", "I couldn't generate an answer.")
+                source_docs = response.get("source_documents", [])
+
+                # run hallucination check
+                hflags = hallucination_check(answer, source_docs)
+                if hflags:
+                    hall_msg = "\n\n".join([f"> **{f}**" for f in hflags])
+                    answer += f"\n\n**!!! HALÜSİNASYON UYARILARI !!!**\n\n{hall_msg}"
+
+                # add example mini-calculation if user asked about allowable (we do a simple detection)
+                if re.search(r'allowable|σ_allow|sigma_allow|σ_allow', prompt, flags=re.IGNORECASE):
+                    # default example numbers (these could be interactive inputs later)
+                    example = compute_allowable(800.0, 20.0, 1.5)
+                    answer += f"\n\n**Örnek Hesap:** F_t0(dry)=800 MPa; hot-wet -20% → F_hot_wet={example['f_hot_wet']:.0f} MPa; γ_M=1.5 ⇒ σ_allow≈{example['sigma_allow']:.0f} MPa"
 
                 sources_md = format_source_documents(source_docs)
-                
-                # Enhanced answer with metadata
-                answer_md = f"{answer}\n\n---\n**⏱️ Analiz süresi:** {dt:.2f}s | **🤖 Model:** {selected_model_name} | **📄 Kaynak sayısı:** {len(source_docs)}"
+                answer_md = f"{answer}\n\n*Response generated in {dt:.2f}s using {selected_model_name}*"
 
-                display_chat("assistant", answer_md, sources_md, quality_issues)
-                
-                # Store with quality info
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": answer_md, 
-                    "sources": sources_md,
-                    "quality_issues": quality_issues
-                })
-
+                display_chat("assistant", answer_md, sources_md)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": answer_md, "sources": sources_md}
+                )
         except Exception as e:
-            st.error(f"Cevap oluşturulurken hata: {str(e)}")
-            st.info("HF token ve model erişiminizi kontrol edin.")
+            st.error(f"Error generating response: {str(e)}")
+            st.info("Make sure your HUGGINGFACEHUB_API_TOKEN is set and the selected model is available to your token.")
 
-    # Enhanced footer controls
+    # Footer controls
     st.markdown("---")
-    c1, c2, c3, c4 = st.columns(4)
-    
+    c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("🗑️ Sohbeti Temizle"):
+        if st.button("🗑️ Clear Chat History"):
             st.session_state.messages = []
             st.session_state.qa_chain = None
-            st.session_state.quality_scores = []
             st.rerun()
-    
     with c2:
-        if st.button("🔄 Vector Store Yenile"):
+        if st.button("🔄 Reload Vector Store"):
             st.session_state.vectorstore = None
             st.cache_resource.clear()
             st.rerun()
-    
     with c3:
-        if st.button("📊 Kalite Raporu"):
-            if st.session_state.messages:
-                # Generate quality report
-                st.info("Kalite raporu özelliği geliştirme aşamasında...")
-    
-    with c4:
-        if st.button("📥 Sohbeti İndir"):
-            if st.session_state.messages:
-                chat_export = json.dumps(st.session_state.messages, indent=2, ensure_ascii=False)
-                st.download_button(
-                    label="JSON olarak indir",
-                    data=chat_export,
-                    file_name=f"chat_export_{int(time.time())}.json",
-                    mime="application/json"
-                )
+        st.markdown("**Model:** " + selected_model_name)
 
 if __name__ == "__main__":
     main()
