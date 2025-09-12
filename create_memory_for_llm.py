@@ -82,45 +82,52 @@ class DocumentProcessor:
             return "No source documents found."
         formatted = []
         for i, doc in enumerate(source_docs, 1):
-            content = doc.page_content
+            content = doc.page_content or ""
             preview = (content[:1000] + "...") if len(content) > 1000 else content
             source = doc.metadata.get("source", "Unknown source")
-
-            # PDF page numbers düzeltme
-            raw_page = doc.metadata.get("page", 0)
-            page_num = int(raw_page) + 1  # 0 tabanlı indexi 1 tabanlıya çevir
-
+            # robust page number handling (handles None, str, int)
+            raw_page = doc.metadata.get("page", None)
+            try:
+                page_num = int(raw_page) + 1 if raw_page is not None and str(raw_page).isdigit() else raw_page
+            except Exception:
+                page_num = raw_page
+            chunk_id = doc.metadata.get("chunk_id", "N/A")
             formatted.append(
-                f"**Source {i}:** {source} (Page {page_num})\n\n*Preview:* {preview}"
+                f"**Source {i}:** {source} (Page {page_num}, chunk_id={chunk_id})\n\n*Preview:* {preview}"
             )
         return "\n\n---\n\n".join(formatted)
 
 
-    def create_chunks(self, documents: List[Document]) -> List[Document]:
-        """Create text chunks with improved splitting strategy"""
+   def create_chunks(self, documents: List[Document]) -> List[Document]:
+        """Create text chunks with improved splitting strategy and robust metadata"""
         if not documents:
             logger.warning("No documents to chunk!")
             return []
-        
-        # Use RecursiveCharacterTextSplitter with improved parameters
+
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
             length_function=len,
-            separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],  # Better splitting hierarchy
-            add_start_index=True  # Add start index for better tracking
+            separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
+            add_start_index=True
         )
-        
+
         chunks = text_splitter.split_documents(documents)
-        
-        # Add chunk metadata
+
+        # Add chunk metadata (ensure source and page are preserved and chunk_id set)
         for i, chunk in enumerate(chunks):
+            meta = chunk.metadata or {}
+            # If original loader included 'page' or 'source', keep them; else try to set defaults
+            source = meta.get('source', meta.get('file', 'Unknown'))
+            page = meta.get('page', meta.get('page_number', None))
             chunk.metadata.update({
                 'chunk_id': i,
                 'chunk_size': len(chunk.page_content),
-                'total_chunks': len(chunks)
+                'total_chunks': len(chunks),
+                'source': source,
+                'page': page
             })
-        
+
         logger.info(f"Created {len(chunks)} text chunks")
         return chunks
     
@@ -298,4 +305,5 @@ if __name__ == "__main__":
     if success:
         print("✅ Document processing completed successfully!")
     else:
+
         print("❌ Document processing failed!")
